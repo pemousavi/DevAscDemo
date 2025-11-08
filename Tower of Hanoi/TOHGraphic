@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""
+TOHGraphic.py
+Simple animated Tower of Hanoi visualizer using tkinter.
+
+Usage:
+    python TOHGraphic.py [num_disks]
+If no argument is given, defaults to 4.
+"""
+
+import sys
+import tkinter as tk
+
+class TOHAnimator:
+    def __init__(self, n_disks=4, move_delay=300):
+        self.n = max(1, min(10, int(n_disks)))
+        self.move_delay = move_delay  # ms between moves
+        self.root = tk.Tk()
+        self.root.title(f"Tower of Hanoi — {self.n} disks")
+        self.width = 800
+        self.height = 400
+        self.canvas = tk.Canvas(self.root, width=self.width, height=self.height, bg="#f0f0f0")
+        self.canvas.pack()
+        # Layout
+        margin = 80
+        self.pegs_x = [
+            margin,
+            self.width // 2,
+            self.width - margin
+        ]
+        self.peg_y_base = self.height - 50
+        self.peg_height = 180
+        self.disk_height = 20
+        self.disk_max_width = 220
+        self.disk_min_width = 40
+        self.disk_width_step = (self.disk_max_width - self.disk_min_width) / max(1, self.n - 1)
+        # State: lists per peg, keep disk sizes (1..n), bottom at index 0
+        self.pegs = [list(range(self.n, 0, -1)), [], []]  # left -> right
+        self.disk_items = {}  # size -> canvas item id
+        self.disk_colors = self._generate_colors(self.n)
+        self._draw_pegs()
+        self._draw_disks_initial()
+        # Build generator of moves
+        self.moves = self._hanoi_generator(self.n, 0, 2, 1)
+        # Control
+        self.running = True
+        self.root.after(600, self._next_move)
+        # Add a simple control: click toggles pause/resume
+        self.canvas.bind("<Button-1>", self._toggle_run)
+        info = "Click anywhere to pause/resume"
+        self.canvas.create_text(self.width//2, 15, text=info, fill="#444", font=("Arial", 10))
+
+    def _generate_colors(self, n):
+        base = [(255, 99, 71), (60, 179, 113), (65,105,225), (238,130,238),
+                (255,215,0), (70,130,180), (240,128,128), (152,251,152), (221,160,221), (173,216,230)]
+        def rgb_to_hex(rgb): return "#%02x%02x%02x" % rgb
+        return [rgb_to_hex(base[i % len(base)]) for i in range(n, 0, -1)]
+
+    def _draw_pegs(self):
+        for x in self.pegs_x:
+            self.canvas.create_rectangle(x-5, self.peg_y_base-self.peg_height, x+5, self.peg_y_base, fill="#6b4f3f", outline="")
+            # base
+        self.canvas.create_rectangle(20, self.peg_y_base, self.width-20, self.peg_y_base+10, fill="#6b4f3f", outline="")
+
+    def _disk_x_range(self, peg_x, size):
+        width = self.disk_min_width + (size-1) * self.disk_width_step
+        left = peg_x - width/2
+        right = peg_x + width/2
+        return left, right
+
+    def _draw_disks_initial(self):
+        for peg_index, stack in enumerate(self.pegs):
+            for depth, size in enumerate(stack):
+                # depth 0 is bottom, so compute y accordingly
+                x = self.pegs_x[peg_index]
+                left, right = self._disk_x_range(x, size)
+                # y: bottom - (depth+1)*disk_height
+                y_bottom = self.peg_y_base - (depth) * self.disk_height
+                y_top = y_bottom - self.disk_height + 2
+                item = self.canvas.create_rectangle(left, y_top, right, y_bottom, fill=self.disk_colors[size-1], outline="#333")
+                # optionally add text
+                # self.canvas.create_text(x, (y_top+y_bottom)/2, text=str(size), fill="white")
+                self.disk_items[size] = item
+
+    def _hanoi_generator(self, n, src, dst, aux):
+        if n == 0:
+            return
+        yield from self._hanoi_generator(n-1, src, aux, dst)
+        yield (src, dst)
+        yield from self._hanoi_generator(n-1, aux, dst, src)
+
+    def _toggle_run(self, event=None):
+        self.running = not self.running
+        if self.running:
+            self._next_move()
+
+    def _next_move(self):
+        if not self.running:
+            return
+        try:
+            src, dst = next(self.moves)
+        except StopIteration:
+            # finished
+            self.canvas.create_text(self.width//2, self.height-20, text="Done", fill="#222", font=("Arial", 12, "bold"))
+            return
+        self.root.after(0, lambda s=src, d=dst: self._animate_move(s, d))
+
+    def _animate_move(self, src, dst):
+        # pop disk from src (top)
+        if not self.pegs[src]:
+            return
+        disk_size = self.pegs[src].pop()  # topmost is last element
+        item = self.disk_items[disk_size]
+        # compute positions
+        src_x = self.pegs_x[src]
+        dst_x = self.pegs_x[dst]
+        # current coords
+        coords = self.canvas.coords(item)  # [left, top, right, bottom]
+        # target bottom y for destination (stack height)
+        dst_depth = len(self.pegs[dst])
+        target_bottom = self.peg_y_base - (dst_depth) * self.disk_height
+        target_top = target_bottom - self.disk_height + 2
+        # lift up to a fixed height (top_y)
+        top_y = self.peg_y_base - self.peg_height - 10
+        # animate: up -> horizontal -> down
+        def move_to(new_x_center, new_top):
+            # move center to new_x_center, and top to new_top
+            left, top, right, bottom = self.canvas.coords(item)
+            cur_center = (left + right)/2
+            dx = new_x_center - cur_center
+            dy = new_top - top
+            steps = max(int(abs(dx)/8)+1, int(abs(dy)/6)+1)
+            sx = dx/steps
+            sy = dy/steps
+            def step(i=0):
+                if i >= steps:
+                    # set final exactly
+                    self.canvas.coords(item, left+dx, top+dy, right+dx, bottom+dy)
+                    self.canvas.update()
+                    return
+                self.canvas.move(item, sx, sy)
+                self.canvas.update()
+                self.canvas.after(8, lambda i=i+1: step(i))
+            step()
+        # Up
+        move_to(src_x, top_y)
+        # Horizontal
+        move_to(dst_x, top_y)
+        # Down
+        move_to(dst_x, target_top)
+        # update model
+        self.pegs[dst].append(disk_size)
+        # schedule next move
+        self.root.after(self.move_delay, self._next_move)
+
+    def start(self):
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    n = 4
+    if len(sys.argv) > 1:
+        try:
+            n = int(sys.argv[1])
+        except:
+            pass
+    app = TOHAnimator(n_disks=n, move_delay=220)
+    app.start()
